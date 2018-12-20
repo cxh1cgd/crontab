@@ -1,0 +1,16 @@
+{
+  "server": {
+    "cpu": 6,
+    "addr": ":8080",
+    "read_time_out": 5000,
+    "write_time_out": 5000
+  },
+  "etcd_client": {
+    "endpoints": [
+      "127.0.0.1:8000",
+      "127.0.0.1:9000"
+    ],
+    "dial_time_out": 10,
+    "max_send_Size": 10485760
+  }
+}
