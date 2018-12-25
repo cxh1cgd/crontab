@@ -12,7 +12,9 @@ import (
 	"os"
 )
 
-var Conf *Config = &Config{}
+var Conf *Config = &Config{
+	EtcdClient: &EtcdClient{Endpoints: make([]string, 0)},
+}
 
 type Config struct {
 	*Server     `json:"server"`

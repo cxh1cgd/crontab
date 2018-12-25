@@ -7,6 +7,7 @@
 package config
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -16,4 +17,5 @@ func TestInit(t *testing.T) {
 		t.Errorf("解析配置文件失败，err:%s", err)
 		return
 	}
+	fmt.Println(Conf.Endpoints)
 }
