@@ -13,5 +13,7 @@ import (
 
 func LoadRouter(r *httprouter.Router) {
 	r.POST("/job", job.CreateJob)
-	r.GET("/job", job.GetJob)
+	r.GET("/job", job.GetJobs)
+	r.GET("/job/:jobId", job.GetJob)
+	r.DELETE("/job/:jobId", job.DeleteJob)
 }
