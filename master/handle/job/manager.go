@@ -9,24 +9,32 @@ package job
 import (
 	"context"
 	"crontab/common/protocol"
+	"crontab/master/config"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"github.com/satori/go.uuid"
 	"go.etcd.io/etcd/clientv3"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 var Manager *jobManager
 
+const (
+	JobPrefix string = "/jobs/exec/"
+)
+
 var p = sync.Pool{
 	New: func() interface{} {
-		return &jobs{l: new(sync.Mutex), m: make(map[string]*Job, 1000)}
+		return &Job{}
 	},
 }
 
-func init() {
-	if err := InitJobManager(); err != nil {
+func Init() {
+	if err := initJobManager(); err != nil {
 		log.Fatalf("初始化任务管理失败，程序即将关闭，原因:%s", err)
 	}
 	Manager.asyncSave() //异步保存任务到etcd中
@@ -43,34 +51,39 @@ type jobManager struct {
 }
 
 type jobs struct {
-	l *sync.Mutex
+	l sync.Mutex
 	m map[string]*Job
 }
 
 type Job struct {
-	j     *protocol.Job
-	retry int //添加到etcd中失败后，重新添加次数
+	J     *protocol.Job
+	lock  uint32 //并发原子操作锁
+	retry int    //添加到etcd中失败后，重新添加次数
 }
 
 //初始化任务管理
-func InitJobManager() error {
+func initJobManager() error {
 	Manager = &jobManager{
 		client: nil,
-		jobs:   p.Get().(*jobs),
+		jobs: &jobs{
+			m: make(map[string]*Job, 1000),
+		},
 		FailedJobs: &jobs{
 			m: make(map[string]*Job),
 		},
 	}
+
 	return Manager.connetctToEtcd()
 }
 
 //连接etcd
 func (manager *jobManager) connetctToEtcd() error {
 	c := clientv3.Config{
-		Endpoints:          []string{},
-		DialTimeout:        10 * time.Second,
+		Endpoints:          config.Conf.Endpoints,
 		MaxCallSendMsgSize: 10 * 1024 * 1024,
+		DialTimeout:        5 * time.Second,
 	}
+
 	client, err := clientv3.New(c)
 	if err == nil {
 		manager.client = client
@@ -81,13 +94,14 @@ func (manager *jobManager) connetctToEtcd() error {
 //创建任务
 func (jm *jobManager) AddJob(name, command, exp string) {
 	id, _ := uuid.NewV4()
-	jobId := id.String()
 	job := &Job{
-		j: &protocol.Job{
-			JobId: jobId, Command: command, Expression: exp,
+		J: &protocol.Job{
+			JobId: id.String(), Command: command, Expression: exp, Name: name,
 		},
 		retry: 5,
+		lock:  0,
 	}
+	jobId := JobPrefix + id.String()
 	jm.jobs.l.Lock()
 	jm.jobs.m[jobId] = job
 	jm.jobs.l.Unlock()
@@ -99,11 +113,12 @@ func (manager *jobManager) asyncSave() {
 		if manager.client == nil {
 			log.Fatal("etcd连接为空，程序即将关闭")
 		}
-		if len(manager.m) >= 800 {
-			manager.OnSend <- struct{}{}
-		}
-		ticker := time.NewTicker(5 * time.Second)
+
+		ticker := time.NewTicker(1 * time.Second)
 		for {
+			if len(manager.m) >= 800 {
+				manager.OnSend <- struct{}{}
+			}
 			select {
 			case <-ticker.C:
 				manager.save()
@@ -118,20 +133,64 @@ func (manager *jobManager) save() {
 	for i := 0; i < 10; i++ {
 		go func() {
 			for k, v := range manager.jobs.m {
-
-				data, _ := json.Marshal(v)
-				_, err := manager.client.Put(context.TODO(), k, string(data))
-				if err != nil {
-					log.Printf("添加任务失败，稍后将自动重新添加,k:%s v:%v\n", k, *v)
-					if v.retry == 0 {
-						log.Printf("该任务无法添加，,k:%s v:%v\n", k, *v)
+				if atomic.CompareAndSwapUint32(&v.lock, 0, 1) {
+					data, _ := json.Marshal(v)
+					_, err := manager.client.Put(context.TODO(), k, string(data))
+					if err != nil {
+						if v.retry != 0 {
+							v.retry--
+							log.Printf("添加任务失败，剩余自动重新添加次数：%d,k:%s v:%v\n", v.retry, k, *v)
+							continue
+						}
+						log.Printf("该任务无法添加,k:%s v:%v\n", k, *v)
 						manager.FailedJobs.m[k] = v
 					}
-					v.retry--
-					continue
+					log.Printf("任务添加成功,k:%s v:%v\n", k, *v)
+					delete(manager.jobs.m, k)
 				}
-				delete(manager.jobs.m, k)
 			}
 		}()
 	}
+}
+
+//获取一个任务
+func (manager *jobManager) GetJob(key string) (*Job, error) {
+	resp, err := manager.client.Get(context.TODO(), JobPrefix+key)
+	if err != nil {
+		return nil, err
+	}
+	if resp.Count == 0 {
+		return nil, errors.New("任务不存在")
+	}
+	data := resp.Kvs[0].Value
+	job := p.Get().(*Job)
+	defer p.Put(job)
+	err = json.Unmarshal(data, job)
+	return job, err
+}
+
+//获取所有任务列表
+func (manager *jobManager) GetJobs() ([]*Job, error) {
+	resp, err := manager.client.Get(context.TODO(), JobPrefix, clientv3.WithPrefix())
+	if err != nil {
+		return nil, err
+	}
+	var jobs = make([]*Job, 0)
+	for _, kv := range resp.Kvs {
+		job := p.Get().(*Job)
+		defer p.Put(job)
+		if err = json.Unmarshal(kv.Value, job); err != nil {
+			return nil, err
+		}
+
+		jobs = append(jobs, job)
+	}
+	return jobs, nil
+}
+
+//删除任务
+func (manager *jobManager) DeleteJob(key string) error {
+	_, err := manager.client.Delete(context.TODO(), fmt.Sprintf("/jobs/exec/%s", key))
+	delete(manager.m, key)
+	return err
 }
