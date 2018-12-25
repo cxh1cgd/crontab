@@ -8,6 +8,7 @@ package main
 
 import (
 	"crontab/master/config"
+	"crontab/master/handle/job"
 	"crontab/master/router"
 	"flag"
 	"github.com/julienschmidt/httprouter"
@@ -18,18 +19,21 @@ import (
 )
 
 var confpath string
+var conf *config.Config
 
 func init() {
 	flag.StringVar(&confpath, "f", "./config/conf.json", "config file path")
 }
+
 func main() {
 	flag.Parse()
 	var err error
 	if err = config.Init(confpath); err != nil {
 		log.Fatal(err)
 	}
-	conf := config.Conf
+	conf = config.Conf
 	runtime.GOMAXPROCS(int(conf.Cpu))
+	job.Init() //初始化任务管理
 	r := httprouter.New()
 	router.LoadRouter(r)
 	server := http.Server{
@@ -38,8 +42,7 @@ func main() {
 		WriteTimeout: time.Duration(conf.WriteTimeOut) * time.Millisecond,
 		Handler:      r,
 	}
-
-	if err = server.ListenAndServe(); err != nil {
+	if err := server.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}
 }
