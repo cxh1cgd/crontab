@@ -9,7 +9,9 @@ package job
 import (
 	"crontab/master/handle"
 	"github.com/julienschmidt/httprouter"
+	"log"
 	"net/http"
+	"strings"
 )
 
 //添加任务
@@ -33,9 +35,77 @@ func CreateJob(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	})
 }
 
-func GetJob(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+//获取单个任务
+func GetJob(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
+	jobID := strings.Trim(p.ByName("jobId"), " ")
+	if jobID == "" {
+		handle.SendResponse(w, &handle.Response{
+			Code:    400,
+			Message: "非法参数",
+		})
+		return
+	}
+	job, err := Manager.GetJob(jobID)
+	if err != nil {
+		handle.SendResponse(w, &handle.Response{
+			Code:    500,
+			Message: "获取任务失败",
+		})
+		return
+	}
+	handle.SendResponse(w, &handle.Response{
+		Code:    0,
+		Message: "成功",
+		Data:    map[string]interface{}{"job": job},
+	})
+}
+
+//获取所有任务
+func GetJobs(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	jobs, err := Manager.GetJobs()
+	if err != nil {
+		handle.SendResponse(w, &handle.Response{
+			Code:    500,
+			Message: "获取任务列表失败",
+		})
+		return
+	}
+	handle.SendResponse(w, &handle.Response{
+		Code:    0,
+		Message: "成功",
+		Data:    map[string]interface{}{"jobs": jobs},
+	})
+}
+
+//删除任务
+func DeleteJob(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
+	jobID := p.ByName("jobId")
+	if jobID == "" {
+		handle.SendResponse(w, &handle.Response{
+			Code:    400,
+			Message: "非法参数",
+		})
+		return
+	}
+	if err := Manager.DeleteJob(jobID); err != nil {
+		handle.SendResponse(w, &handle.Response{
+			Code:    500,
+			Message: "删除任务失败",
+		})
+		log.Print(err.Error())
+		return
+	}
+
 	handle.SendResponse(w, &handle.Response{
 		Code:    0,
 		Message: "成功",
 	})
 }
+
+/*//获取失败任务列表
+func GetFailedJobs(w http.ResponseWriter,r *http.Request,_ httprouter.Params){
+	handle.SendResponse(w,&handle.Response{
+		Code:0,
+		Message:"成功",
+	})
+}*/
