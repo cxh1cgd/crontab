@@ -1,0 +1,13 @@
+{
+  "server": {
+    "cpu": 6
+  },
+  "etcd_client": {
+    "endpoints": [
+      "192.168.199.127:2379",
+      "172.16.196.129:2379"
+    ],
+    "dial_time_out": 10,
+    "max_send_Size": 10485760
+  }
+}
