@@ -42,20 +42,24 @@ func handleExecPlan(plan *JobPlan) {
 	defer func() {
 		Executor.Done <- plan.JobId
 	}()
+	start := time.Now().UnixNano()
 	lock := new(EtcdLock)
 	lock.Key = protocol.JobLockDir + plan.JobId
 	//没有获取到锁
 	if lock.Lock() != nil {
 		return
 	}
+	end := time.Now().UnixNano()
+	fmt.Printf("cost:%d\n", end-start)
 	plan.status = StatusExec
 	result := execCmd(plan)
 	lock.Unlock()
 	plan.RestTime()
+
 	//todo:异步保存任务结果
 	result.JobId = plan.JobId
 	result.Name = plan.Name
-	fmt.Println(result.OutPut)
+	//fmt.Println(result.OutPut)
 }
 
 func execCmd(plan *JobPlan) (result *protocol.JobResult) {

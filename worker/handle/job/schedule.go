@@ -61,7 +61,13 @@ func (s *scheduler) scheduleLoop() {
 						log.Printf("更新任务列表成功，jobId:%s Name:%s\n", plan.JobId, plan.Name)
 					}
 				}
+			}
+		}
+	}()
 
+	go func() {
+		for {
+			select {
 			//强制杀死正在执行的任务
 			case jobId := <-s.killChan:
 				p, ok := Executor.m.Load(jobId)
@@ -95,14 +101,17 @@ func (s *scheduler) scheduleLoop() {
 
 	//定期将要到期以及到期的任务取出
 	go func() {
-		ticker := time.NewTicker(20 * time.Millisecond)
+		ticker := time.NewTicker(5 * time.Millisecond)
 		for {
 			select {
 			case <-ticker.C:
-				if plan := s.table.Pop(); plan != nil {
-					fmt.Println(*plan)
-					//执行任务
-					go handleExecPlan(plan)
+
+				if plans := s.table.Pop(); len(plans) != 0 {
+
+					for _, plan := range plans {
+						//执行任务
+						go handleExecPlan(plan)
+					}
 				}
 			}
 		}
@@ -144,11 +153,23 @@ func (t *jobScheduleTable) Insert(data *JobPlan) {
 			after[i-1] = current.forward[i-1]
 			before[i-1] = current
 		} else {
-			for current.forward[i-1] != nil && current.forward[i-1].data.nextTime.Before(data.nextTime) {
+			for current.forward[i-1] != nil && (current.forward[i-1].data.nextTime.Before(data.nextTime) || current.forward[i-1].data.nextTime.Equal(data.nextTime)) {
 				current = current.forward[i-1]
 			}
+			fmt.Println(i)
 			before[i-1] = current
 			after[i-1] = current.forward[i-1]
+			/*for  {
+				if current.forward[i-1] != nil{
+					if current.forward[i-1].data.nextTime.Before(data.nextTime) {
+						current = current.forward[i-1]
+					}else {
+
+					}
+				}else {
+					break
+				}
+			}*/
 		}
 	}
 
@@ -176,16 +197,19 @@ func (t *jobScheduleTable) DeleteByJobId(id string) {
 }
 
 //弹出跳表中需要最近要执行的任务
-func (t *jobScheduleTable) Pop() *JobPlan {
-	if t.head.forward[0] != nil {
+func (t *jobScheduleTable) Pop() []*JobPlan {
+	var plans = make([]*JobPlan, 0, 10000)
+	for t.head.forward[0] != nil && len(plans) <= 10 {
 		d := t.head.forward[0].data
-		if d.nextTime.Before(time.Now()) || d.nextTime.Equal(time.Now()) {
+		if d.nextTime.Before(time.Now()) || d.nextTime.Equal(time.Now()) || time.Now().Add(10*time.Millisecond).After(d.nextTime) {
 			t.DeleteByJobId(d.JobId)
-			return d
+			plans = append(plans, d)
+		} else {
+			break
 		}
-		return nil
 	}
-	return nil
+
+	return plans
 }
 
 func (t *jobScheduleTable) Print() {
@@ -195,7 +219,7 @@ func (t *jobScheduleTable) Print() {
 			if current.forward[i-1] == nil {
 				break
 			}
-			fmt.Printf("%d ", current.forward[i-1].data)
+			fmt.Printf("%s ", current.forward[i-1].data.JobId)
 			current = current.forward[i-1]
 		}
 		fmt.Printf("***************** Level %d \n", i)

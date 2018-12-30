@@ -102,6 +102,36 @@ func DeleteJob(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 	})
 }
 
+//更新任务
+func Update(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
+	r.ParseForm()
+	vals := r.PostForm
+	jobId := vals["jobId"][0]
+	name := vals["name"][0]
+	command := vals["command"][0]
+	express := vals["expression"][0]
+	if command == "" || name == "" || express == "" {
+		handle.SendResponse(w, &handle.Response{
+			Code:    400,
+			Message: "非法参数",
+		})
+		return
+	}
+	err := Manager.UpdateJob(jobId, name, command, express)
+	if err != nil {
+		handle.SendResponse(w, &handle.Response{
+			Code:    500,
+			Message: "更新任务失败",
+		})
+		return
+	}
+	handle.SendResponse(w, &handle.Response{
+		Code:    0,
+		Message: "OK",
+	})
+	log.Printf("更新任务成功，任务ID：%s\n", jobId)
+}
+
 /*//获取失败任务列表
 func GetFailedJobs(w http.ResponseWriter,r *http.Request,_ httprouter.Params){
 	handle.SendResponse(w,&handle.Response{

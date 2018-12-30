@@ -29,7 +29,7 @@ const (
 
 var p = sync.Pool{
 	New: func() interface{} {
-		return &Job{}
+		return &protocol.Job{}
 	},
 }
 
@@ -38,6 +38,11 @@ func Init() {
 		log.Fatalf("初始化任务管理失败，程序即将关闭，原因:%s", err)
 	}
 	Manager.asyncSave() //异步保存任务到etcd中
+	resp, err := Manager.client.Get(context.TODO(), "/test/", clientv3.WithPrefix())
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(string(resp.Kvs[0].Value))
 }
 
 type jobManager struct {
@@ -96,12 +101,12 @@ func (jm *jobManager) AddJob(name, command, exp string) {
 	id, _ := uuid.NewV4()
 	job := &Job{
 		J: &protocol.Job{
-			JobId: id.String(), Command: command, Expression: exp, Name: name,
+			JobId: id.String(), Command: command, Expression: exp, Name: name, Times: 0,
 		},
 		retry: 5,
 		lock:  0,
 	}
-	jobId := JobPrefix + id.String()
+	jobId := protocol.JobSaveDir + id.String()
 	jm.jobs.l.Lock()
 	jm.jobs.m[jobId] = job
 	jm.jobs.l.Unlock()
@@ -134,7 +139,7 @@ func (manager *jobManager) save() {
 		go func() {
 			for k, v := range manager.jobs.m {
 				if atomic.CompareAndSwapUint32(&v.lock, 0, 1) {
-					data, _ := json.Marshal(v)
+					data, _ := json.Marshal(v.J)
 					_, err := manager.client.Put(context.TODO(), k, string(data))
 					if err != nil {
 						if v.retry != 0 {
@@ -154,7 +159,7 @@ func (manager *jobManager) save() {
 }
 
 //获取一个任务
-func (manager *jobManager) GetJob(key string) (*Job, error) {
+func (manager *jobManager) GetJob(key string) (*protocol.Job, error) {
 	resp, err := manager.client.Get(context.TODO(), JobPrefix+key)
 	if err != nil {
 		return nil, err
@@ -163,26 +168,26 @@ func (manager *jobManager) GetJob(key string) (*Job, error) {
 		return nil, errors.New("任务不存在")
 	}
 	data := resp.Kvs[0].Value
-	job := p.Get().(*Job)
+	job := p.Get().(*protocol.Job)
 	defer p.Put(job)
 	err = json.Unmarshal(data, job)
 	return job, err
 }
 
 //获取所有任务列表
-func (manager *jobManager) GetJobs() ([]*Job, error) {
-	resp, err := manager.client.Get(context.TODO(), JobPrefix, clientv3.WithPrefix())
+func (manager *jobManager) GetJobs() ([]*protocol.Job, error) {
+	resp, err := manager.client.Get(context.TODO(), protocol.JobSaveDir, clientv3.WithPrefix())
 	if err != nil {
 		return nil, err
 	}
-	var jobs = make([]*Job, 0)
+	var jobs = make([]*protocol.Job, 0)
 	for _, kv := range resp.Kvs {
-		job := p.Get().(*Job)
-		defer p.Put(job)
+		//var job = new(protocol.Job)
+		job := p.Get().(*protocol.Job)
 		if err = json.Unmarshal(kv.Value, job); err != nil {
 			return nil, err
 		}
-
+		fmt.Println(job)
 		jobs = append(jobs, job)
 	}
 	return jobs, nil
@@ -190,7 +195,31 @@ func (manager *jobManager) GetJobs() ([]*Job, error) {
 
 //删除任务
 func (manager *jobManager) DeleteJob(key string) error {
-	_, err := manager.client.Delete(context.TODO(), fmt.Sprintf("/jobs/exec/%s", key))
+	_, err := manager.client.Delete(context.TODO(), protocol.JobSaveDir+key)
 	delete(manager.m, key)
 	return err
+}
+
+func (manager *jobManager) UpdateJob(jobId string, name string, command string, expression string) error {
+	resp, err := manager.client.Get(context.TODO(), protocol.JobSaveDir+jobId, clientv3.WithCountOnly())
+	if err != nil {
+		return err
+	}
+	if resp.Count == 0 {
+		return errors.New("该任务不存在")
+	}
+	job := protocol.JobPool.Get().(*protocol.Job)
+	job.JobId = jobId
+	job.Name = name
+	job.Command = command
+	job.Expression = expression
+	data, err := json.Marshal(job)
+	if err != nil {
+		return err
+	}
+	_, err = manager.client.Put(context.TODO(), protocol.JobSaveDir+jobId, string(data))
+	if err != nil {
+		return err
+	}
+	return nil
 }
