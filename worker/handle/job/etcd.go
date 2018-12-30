@@ -19,6 +19,7 @@ import (
 var (
 	Client *clientv3.Client
 	Lease  clientv3.Lease
+	Kv     clientv3.KV
 )
 
 func InitEtcd() {
@@ -34,6 +35,7 @@ func InitEtcd() {
 		log.Fatalf("无法连接到etcd,启动进程失败,原因:%s", err.Error())
 	}
 	Lease = clientv3.NewLease(Client)
+	Kv = clientv3.NewKV(Client)
 }
 
 //分布式锁
@@ -46,8 +48,7 @@ type EtcdLock struct {
 }
 
 func (l *EtcdLock) init() error {
-	l.txn = clientv3.NewKV(Client).Txn(context.TODO())
-
+	l.txn = Kv.Txn(context.TODO())
 	leaseResp, err := Lease.Grant(context.TODO(), l.Ttl)
 	if err != nil {
 		return err
@@ -64,7 +65,6 @@ func (l *EtcdLock) Lock() error {
 	if err != nil {
 		return err
 	}
-
 	l.txn.If(clientv3.Compare(clientv3.CreateRevision(l.Key), "=", 0)).
 		Then(clientv3.OpPut(l.Key, "", clientv3.WithLease(l.leaseId))).
 		Else()
